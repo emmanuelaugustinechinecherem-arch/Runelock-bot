@@ -2,7 +2,7 @@ import os
 import logging
 from flask import Flask, request
 from telegram import Update, Bot
-from telegram.ext import Dispatcher, CommandHandler, MessageHandler, filters, CallbackContext
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
 import google.generativeai as genai
 
 # ========== LOGGING ==========
@@ -57,7 +57,7 @@ def handle_message(update: Update, context: CallbackContext):
         update.message.reply_text("⚠️ Sorry, I'm having trouble thinking right now. Try again!")
 
 dispatcher.add_handler(CommandHandler("start", start))
-dispatcher.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
 
 # ========== WEBHOOK ENDPOINT ==========
 @app.route('/telegram-webhook', methods=['POST'])
