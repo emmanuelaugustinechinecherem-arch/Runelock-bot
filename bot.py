@@ -19,16 +19,13 @@ def send_welcome(message):
 
 @bot.message_handler(func=lambda message: True)
 def chat_with_gemini(message):
-    # Send typing action indicator in Telegram
     bot.send_chat_action(message.chat.id, 'typing')
     
     try:
         response = model.generate_content(message.text)
         
-        # Check if Gemini returned valid text content
         if response and hasattr(response, 'text') and response.text:
             text = response.text
-            # Telegram character limit is 4096 characters per message
             if len(text) > 4000:
                 for i in range(0, len(text), 4000):
                     bot.reply_to(message, text[i:i+4000])
@@ -42,5 +39,7 @@ def chat_with_gemini(message):
         bot.reply_to(message, "❌ An error occurred while contacting Gemini. Please try again.")
 
 if __name__ == "__main__":
-    print("RUNELOCK Bot is polling for messages...")
-    bot.infinity_polling()
+    print("Clearing old webhooks and starting polling...")
+    bot.remove_webhook(drop_pending_updates=True)
+    bot.infinity_polling(skip_pending=True)
+    
