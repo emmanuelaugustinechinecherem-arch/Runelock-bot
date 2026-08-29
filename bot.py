@@ -10,9 +10,30 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
     raise SystemExit("Missing TELEGRAM_TOKEN or GEMINI_API_KEY")
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-3.7-flash")
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode="Markdown")
+MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-3.7-flash",
+]
+
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
+
+def ask_gemini(text):
+    last = None
+    for name in MODELS:
+        try:
+            print("Trying Gemini:", name)
+            model = genai.GenerativeModel(name)
+            response = model.generate_content(text)
+            if response and getattr(response, "text", None):
+                print("OK Gemini:", name)
+                return response.text
+        except Exception as e:
+            print("FAIL Gemini:", name, e)
+            last = e
+    raise last
 
 @bot.message_handler(commands=["start"])
 def start(message):
@@ -22,13 +43,8 @@ def start(message):
 def chat(message):
     bot.send_chat_action(message.chat.id, "typing")
     try:
-        response = model.generate_content(message.text)
-        text = response.text if response and getattr(response, "text", None) else "No reply."
-        if len(text) > 4000:
-            for i in range(0, len(text), 4000):
-                bot.reply_to(message, text[i:i+4000])
-        else:
-            bot.reply_to(message, text)
+        reply = ask_gemini(message.text)
+        bot.reply_to(message, reply[:4000])
     except Exception as e:
         print("AI error:", e)
         bot.reply_to(message, "AI error: " + str(e))
@@ -41,6 +57,5 @@ if __name__ == "__main__":
             print("Bot polling...")
             bot.infinity_polling(timeout=60, long_polling_timeout=60, skip_pending=True)
         except Exception as e:
-            print("Conflict or error:", e)
-            print("Retrying in 5 seconds...")
+            print("Polling error:", e)
             time.sleep(5)
