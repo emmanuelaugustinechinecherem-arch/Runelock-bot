@@ -1,30 +1,59 @@
 import asyncio
+import logging
 import os
-import google.generativeai as genai
+import threading
+from flask import Flask
+from google import genai
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
-# Initialize Gemini API
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-model = genai.GenerativeModel("gemini-3.6-flash")
+# --- CONFIGURATION ---
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_MODEL = "gemini-2.5-flash"
+PORT = int(os.environ.get("PORT", 10000))
+
+# --- LOGGING ---
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+
+# --- FLASK APP (Keeps Render Web Service Active) ---
+app_flask = Flask(__name__)
 
 
+@app_flask.route("/")
+def home():
+    return "Rune Bot is active!"
+
+
+def run_flask():
+    app_flask.run(host="0.0.0.0", port=PORT)
+
+
+# --- GEMINI CLIENT ---
+client = genai.Client(api_key=GEMINI_API_KEY)
+
+
+# --- TELEGRAM HANDLER ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
+    if not update.message or not update.message.text:
+        return
 
-    # 1. Send "typing..." status to Telegram so the user knows it's working
+    user_text = update.message.text
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id, action="typing"
     )
 
     try:
-        # 2. Run model generation in a background thread to prevent blocking/timeouts
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(
-            None, lambda: model.generate_content(user_text)
+            None,
+            lambda: client.models.generate_content(
+                model=GEMINI_MODEL, contents=user_text
+            ),
         )
 
-        # 3. Handle empty/blocked safety filter responses
         if not response or not response.text:
             await update.message.reply_text(
                 "I couldn't generate a response for this prompt due to safety filters."
@@ -33,28 +62,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         full_text = response.text
 
-        # 4. Split long responses into chunks under Telegram's 4096-character limit
         chunk_size = 4000
         for i in range(0, len(full_text), chunk_size):
             await update.message.reply_text(full_text[i : i + chunk_size])
 
     except Exception as e:
-        print(f"Error during generation: {e}")
+        logging.error(f"Error during generation: {e}")
         await update.message.reply_text(
             "Sorry, I encountered an error processing your request."
         )
 
 
 def main():
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    app = ApplicationBuilder().token(token).build()
+    if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
+        raise ValueError("Missing TELEGRAM_TOKEN or GEMINI_API_KEY!")
 
-    app.add_handler(
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
+    tg_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    tg_app.add_handler(
         MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message)
     )
 
-    print("Bot is running...")
-    app.run_polling()
+    logging.info("Starting Telegram Bot...")
+    tg_app.run_polling()
 
 
 if __name__ == "__main__":
