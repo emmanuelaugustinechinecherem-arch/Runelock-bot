@@ -1,77 +1,79 @@
 import os
-import time
-import threading
-import telebot
+import logging
+from flask import Flask, request
+from telegram import Update, Bot
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, filters, CallbackContext
 import google.generativeai as genai
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+# ========== LOGGING ==========
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ========== CONFIG ==========
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://runelock-bot.onrender.com")
+PORT = int(os.environ.get("PORT", 10000))
 
-if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
-    raise SystemExit("Missing TELEGRAM_TOKEN or GEMINI_API_KEY")
-
-def keep_alive():
-    port = int(os.environ.get("PORT", 10000))
-    class H(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"bot ok")
-        def log_message(self, *a):
-            pass
-    print("Web port open on", port)
-    HTTPServer(("0.0.0.0", port), H).serve_forever()
-
-threading.Thread(target=keep_alive, daemon=True).start()
-
+# ========== GEMINI AI SETUP ==========
 genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-3.7-flash",
-]
+# ========== TELEGRAM SETUP ==========
+bot = Bot(token=BOT_TOKEN)
+dispatcher = Dispatcher(bot, None, workers=4)
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
+# ========== FLASK APP ==========
+app = Flask(__name__)
 
-def ask_gemini(text):
-    last = None
-    for name in MODELS:
-        try:
-            print("Trying Gemini:", name)
-            model = genai.GenerativeModel(name)
-            response = model.generate_content(text)
-            if response and getattr(response, "text", None):
-                print("OK Gemini:", name)
-                return response.text
-        except Exception as e:
-            print("FAIL Gemini:", name, e)
-            last = e
-    raise last
+@app.route('/')
+def health():
+    """Fast response for cron-job.org to keep Render alive"""
+    return "bot ok", 200
 
-@bot.message_handler(commands=["start"])
-def start(message):
-    bot.reply_to(message, "Bot is online. Send any message.")
+# ========== BOT COMMANDS ==========
+def start(update: Update, context: CallbackContext):
+    update.message.reply_text(
+        "🤖 *Runelock Bot* is online!\nPowered by Gemini AI. Send me anything!",
+        parse_mode="Markdown"
+    )
 
-@bot.message_handler(func=lambda m: True)
-def chat(message):
-    waiting = bot.reply_to(message, "Thinking...")
+def handle_message(update: Update, context: CallbackContext):
+    user_text = update.message.text
+    bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    
     try:
-        reply = ask_gemini(message.text)
-        bot.edit_message_text(reply[:4000], waiting.chat.id, waiting.message_id)
+        response = model.generate_content(
+            user_text,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=500,
+                temperature=0.7,
+            )
+        )
+        reply = response.text if response.text else "I couldn't generate a response."
+        update.message.reply_text(reply)
     except Exception as e:
-        print("AI error:", e)
-        bot.edit_message_text("AI error: " + str(e), waiting.chat.id, waiting.message_id)
+        logger.error(f"Gemini error: {e}")
+        update.message.reply_text("⚠️ Sorry, I'm having trouble thinking right now. Try again!")
 
-if __name__ == "__main__":
-    bot.remove_webhook()
-    time.sleep(2)
-    while True:
-        try:
-            print("Bot polling...")
-            bot.infinity_polling(timeout=20, long_polling_timeout=20, skip_pending=True)
-        except Exception as e:
-            print("Polling error:", e)
-            time.sleep(5)
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+# ========== WEBHOOK ENDPOINT ==========
+@app.route('/telegram-webhook', methods=['POST'])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+    dispatcher.process_update(update)
+    return "OK", 200
+
+# ========== SET WEBHOOK ON STARTUP ==========
+def setup_webhook():
+    webhook_url = f"{RENDER_URL}/telegram-webhook"
+    bot.set_webhook(webhook_url)
+    logger.info(f"Webhook set: {webhook_url}")
+
+# ========== RUN ==========
+if __name__ == '__main__':
+    setup_webhook()
+    app.run(host='0.0.0.0', port=PORT)
+    
