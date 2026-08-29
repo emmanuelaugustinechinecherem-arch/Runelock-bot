@@ -1,94 +1,46 @@
-import asyncio
-import logging
 import os
-import threading
-from flask import Flask
-from google import genai
-from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+import telebot
+import google.generativeai as genai
 
-# --- CONFIGURATION ---
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+# Fetch environment variables configured on Render
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN") or os.environ.get("BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-GEMINI_MODEL = "gemini-2.5-flash"
-PORT = int(os.environ.get("PORT", 10000))
 
-# --- LOGGING ---
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
-)
+# Configure Gemini API
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-1.5-flash")
 
-# --- FLASK APP (Keeps Render Web Service Active) ---
-app_flask = Flask(__name__)
+# Initialize Telegram Bot
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    bot.reply_to(message, "👋 **RUNELOCK Bot is online!** Send me any question or prompt to chat.")
 
-@app_flask.route("/")
-def home():
-    return "Rune Bot is active!"
-
-
-def run_flask():
-    app_flask.run(host="0.0.0.0", port=PORT)
-
-
-# --- GEMINI CLIENT ---
-client = genai.Client(api_key=GEMINI_API_KEY)
-
-
-# --- TELEGRAM HANDLER ---
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
-
-    user_text = update.message.text
-    await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id, action="typing"
-    )
-
+@bot.message_handler(func=lambda message: True)
+def chat_with_gemini(message):
+    # Send typing action indicator in Telegram
+    bot.send_chat_action(message.chat.id, 'typing')
+    
     try:
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: client.models.generate_content(
-                model=GEMINI_MODEL, contents=user_text
-            ),
-        )
-
-        if not response or not response.text:
-            await update.message.reply_text(
-                "I couldn't generate a response for this prompt due to safety filters."
-            )
-            return
-
-        full_text = response.text
-
-        chunk_size = 4000
-        for i in range(0, len(full_text), chunk_size):
-            await update.message.reply_text(full_text[i : i + chunk_size])
-
+        response = model.generate_content(message.text)
+        
+        # Check if Gemini returned valid text content
+        if response and hasattr(response, 'text') and response.text:
+            text = response.text
+            # Telegram character limit is 4096 characters per message
+            if len(text) > 4000:
+                for i in range(0, len(text), 4000):
+                    bot.reply_to(message, text[i:i+4000])
+            else:
+                bot.reply_to(message, text)
+        else:
+            bot.reply_to(message, "⚠️ Gemini blocked or returned an empty response for that prompt. Try rephrasing.")
+            
     except Exception as e:
-        logging.error(f"Error during generation: {e}")
-        await update.message.reply_text(
-            "Sorry, I encountered an error processing your request."
-        )
-
-
-def main():
-    if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
-        raise ValueError("Missing TELEGRAM_TOKEN or GEMINI_API_KEY!")
-
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-
-    tg_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    tg_app.add_handler(
-        MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message)
-    )
-
-    logging.info("Starting Telegram Bot...")
-    tg_app.run_polling()
-
+        print(f"Error handling request: {e}")
+        bot.reply_to(message, "❌ An error occurred while contacting Gemini. Please try again.")
 
 if __name__ == "__main__":
-    main()
-    
+    print("RUNELOCK Bot is polling for messages...")
+    bot.infinity_polling()
