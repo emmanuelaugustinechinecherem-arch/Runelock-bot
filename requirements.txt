@@ -4,3 +4,8 @@ urllib3==1.26.18
 requests==2.31.0
 google-generativeai==0.7.2
 standard-imghdr==3.13.0
+setuptools==68.2.2
+APScheduler==3.6.3
+pytz==2024.1
+cachetools==5.3.3
+tornado==6.4
