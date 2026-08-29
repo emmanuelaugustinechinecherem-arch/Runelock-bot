@@ -10,7 +10,7 @@ from google import genai
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 PORT = int(os.environ.get("PORT", 10000))
 
 if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
