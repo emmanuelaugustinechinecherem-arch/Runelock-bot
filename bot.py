@@ -1,4 +1,5 @@
 import os
+import time
 import telebot
 import google.generativeai as genai
 
@@ -39,7 +40,15 @@ def chat_with_gemini(message):
         bot.reply_to(message, "❌ An error occurred while contacting Gemini. Please try again.")
 
 if __name__ == "__main__":
-    print("Clearing old webhooks and starting polling...")
-    bot.remove_webhook()
-    bot.infinity_polling(skip_pending=True)
+    print("Starting RUNELOCK Bot polling loop...")
+    
+    # Infinite loop catches 409 conflicts during deployment and retries automatically
+    while True:
+        try:
+            bot.remove_webhook()
+            bot.polling(non_stop=True, interval=1, timeout=20)
+        except Exception as e:
+            print(f"Conflict or Connection Error: {e}")
+            print("Retrying connection in 5 seconds...")
+            time.sleep(5)
         
