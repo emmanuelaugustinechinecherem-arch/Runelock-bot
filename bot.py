@@ -1,79 +1,62 @@
+import asyncio
 import os
-import threading
-import logging
-from flask import Flask
+import google.generativeai as genai
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from google import genai
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
-# --- CONFIGURATION ---
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# Initialize Gemini API
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+model = genai.GenerativeModel("gemini-3.6-flash")
 
-GEMINI_MODEL = "gemini-3.6-flash"
-PORT = int(os.environ.get("PORT", 10000))
-
-if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
-    raise ValueError("Missing TELEGRAM_TOKEN or GEMINI_API_KEY environment variables.")
-
-# --- LOGGING ---
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-# --- GEMINI CLIENT ---
-client = genai.Client(api_key=GEMINI_API_KEY)
-
-# --- FLASK HEALTH CHECK SERVER ---
-flask_app = Flask(__name__)
-
-@flask_app.route('/')
-def home():
-    return "✅ Bot is alive and running 24/7!"
-
-def run_web_server():
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)
-    flask_app.run(host="0.0.0.0", port=PORT)
-
-# --- BOT HANDLERS ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Hello! Powered by Gemini. Ask me anything!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
-    chat_id = update.effective_chat.id
-    logger.info(f"Message from {chat_id}: {user_text}")
+
+    # 1. Send "typing..." status to Telegram so the user knows it's working
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id, action="typing"
+    )
 
     try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=user_text,
-            config={
-                "system_instruction": "You are a helpful AI assistant."
-            }
+        # 2. Run model generation in a background thread to prevent blocking/timeouts
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, lambda: model.generate_content(user_text)
         )
-        reply = response.text
-        await update.message.reply_text(reply)
+
+        # 3. Handle empty/blocked safety filter responses
+        if not response or not response.text:
+            await update.message.reply_text(
+                "I couldn't generate a response for this prompt due to safety filters."
+            )
+            return
+
+        full_text = response.text
+
+        # 4. Split long responses into chunks under Telegram's 4096-character limit
+        chunk_size = 4000
+        for i in range(0, len(full_text), chunk_size):
+            await update.message.reply_text(full_text[i : i + chunk_size])
+
     except Exception as e:
-        logger.error(f"Gemini API error: {e}")
-        await update.message.reply_text("Sorry, I encountered an error processing your request.")
+        print(f"Error during generation: {e}")
+        await update.message.reply_text(
+            "Sorry, I encountered an error processing your request."
+        )
 
-# --- MAIN ENGINE ---
+
 def main():
-    thread = threading.Thread(target=run_web_server, daemon=True)
-    thread.start()
-    logger.info(f"Health check server running on port {PORT}")
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    app = ApplicationBuilder().token(token).build()
 
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(
+        MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message)
+    )
 
-    logger.info("🤖 Bot is running 24/7 on Render...")
-    app.run_polling(drop_pending_updates=True)
+    print("Bot is running...")
+    app.run_polling()
+
 
 if __name__ == "__main__":
     main()
-          
+    
