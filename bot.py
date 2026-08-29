@@ -40,6 +40,6 @@ def chat_with_gemini(message):
 
 if __name__ == "__main__":
     print("Clearing old webhooks and starting polling...")
-    bot.remove_webhook(drop_pending_updates=True)
+    bot.remove_webhook()
     bot.infinity_polling(skip_pending=True)
-    
+        
